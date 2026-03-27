@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from collections import deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -21,16 +23,15 @@ from app.admin_ui import render_admin_page
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_ID = "CohereLabs/cohere-transcribe-03-2026"
 
+RECENT_REQUESTS: deque[dict[str, Any]] = deque(maxlen=20)
+RECENT_REQUESTS_LOCK = Lock()
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-RECENT_REQUESTS: deque[dict[str, Any]] = deque(maxlen=20)
-RECENT_REQUESTS_LOCK = Lock()
 
 
 def _default_local_model_path(model_id: str) -> Path:
@@ -99,6 +100,7 @@ class Settings:
         )
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.load()
 
@@ -106,7 +108,7 @@ def get_settings() -> Settings:
 @dataclass(frozen=True)
 class ModelSource:
     load_target: str
-    source_type: str
+    source_type: str  # "local_path" | "repo_id"
 
 
 def resolve_model_source(settings: Settings) -> ModelSource:
@@ -121,7 +123,6 @@ def resolve_model_source(settings: Settings) -> ModelSource:
                 f"COHERE_MODEL_PATH must point to a model directory, got file: "
                 f"{model_path}"
             )
-
         raise RuntimeError(
             f"Local model directory exists but is incomplete: {model_path}. "
             f"Expected config.json. {_download_hint(settings.model_id, model_path)}"
@@ -145,17 +146,23 @@ class CohereRuntime:
 
     @classmethod
     def create(cls) -> "CohereRuntime":
-        settings = Settings.load()
+        settings = get_settings()
         model_source = resolve_model_source(settings)
+        # When loading from repo_id (remote fallback), local_files_only must be False.
+        local_files_only = (
+            settings.local_files_only
+            if model_source.source_type == "local_path"
+            else False
+        )
         processor = AutoProcessor.from_pretrained(
             model_source.load_target,
             trust_remote_code=True,
-            local_files_only=settings.local_files_only,
+            local_files_only=local_files_only,
         )
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             model_source.load_target,
             trust_remote_code=True,
-            local_files_only=settings.local_files_only,
+            local_files_only=local_files_only,
         ).to(settings.device)
         model.eval()
         return cls(
@@ -217,16 +224,20 @@ def recent_requests() -> list[dict[str, Any]]:
         return list(RECENT_REQUESTS)
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Validate config and pre-load model at startup so the first request is fast.
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, get_runtime)
+    yield
+
+
 app = FastAPI(
     title="Cohere Transcribe Server",
     version="0.1.0",
     description="Minimal HTTP server for CohereLabs/cohere-transcribe-03-2026.",
+    lifespan=lifespan,
 )
-
-
-@app.on_event("startup")
-def validate_startup_configuration() -> None:
-    resolve_model_source(get_settings())
 
 
 @app.get("/healthz")
@@ -339,10 +350,14 @@ async def create_transcription(
             temp_file.write(payload)
             temp_path = temp_file.name
 
-        text = runtime.transcribe_file(
-            audio_path=Path(temp_path),
-            language=target_language,
-            punctuation=punctuation,
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(
+            None,
+            lambda: runtime.transcribe_file(
+                audio_path=Path(temp_path),
+                language=target_language,
+                punctuation=punctuation,
+            ),
         )
     except HTTPException:
         raise
