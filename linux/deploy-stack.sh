@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PYTHON_EXE="${PYTHON_EXE:-python3}"
-VENV_DIR="${VENV_DIR:-.enuv}"
+VENV_DIR="${VENV_DIR:-.venv}"
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-vendor/llama.cpp}"
 LLAMA_BACKEND="${LLAMA_BACKEND:-auto}"
 SKIP_PYTHON_SETUP="${SKIP_PYTHON_SETUP:-0}"

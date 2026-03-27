@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_EXE="${PYTHON_EXE:-$ROOT_DIR/.enuv/bin/python}"
+PYTHON_EXE="${PYTHON_EXE:-$ROOT_DIR/.venv/bin/python}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-9000}"
 MODEL_ID="${MODEL_ID:-CohereLabs/cohere-transcribe-03-2026}"
