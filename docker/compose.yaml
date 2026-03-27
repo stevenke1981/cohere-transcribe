@@ -1,0 +1,38 @@
+services:
+  llama-cpp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.llama
+    container_name: llama-cpp
+    ports:
+      - "${LLAMA_PORT:-8080}:8080"
+    volumes:
+      - "${LLAMA_MODEL_DIR:-../models}:/models"
+    environment:
+      LLAMA_PORT: "8080"
+      LLAMA_MODEL_DIR: "/models"
+      LLAMA_MODEL_FILE: "${LLAMA_MODEL_FILE:-model.gguf}"
+      LLAMA_HF_REPO: "${LLAMA_HF_REPO:-}"
+      LLAMA_CONTEXT_SIZE: "${LLAMA_CONTEXT_SIZE:-8192}"
+      LLAMA_PARALLEL: "${LLAMA_PARALLEL:-1}"
+      LLAMA_GPU_LAYERS: "${LLAMA_GPU_LAYERS:-auto}"
+
+  cohere-transcribe:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cohere
+    container_name: cohere-transcribe
+    environment:
+      COHERE_MODEL_ID: "${COHERE_MODEL_ID:-CohereLabs/cohere-transcribe-03-2026}"
+      COHERE_DEFAULT_LANGUAGE: "${COHERE_DEFAULT_LANGUAGE:-en}"
+      COHERE_DEVICE: "${COHERE_DEVICE:-auto}"
+      COHERE_BATCH_SIZE: "${COHERE_BATCH_SIZE:-8}"
+      COHERE_COMPILE: "${COHERE_COMPILE:-false}"
+      COHERE_PIPELINE_DETOKENIZATION: "${COHERE_PIPELINE_DETOKENIZATION:-false}"
+    ports:
+      - "${COHERE_PORT:-9000}:9000"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+
+volumes:
+  huggingface-cache:

@@ -1,0 +1,26 @@
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+WORKDIR /opt/llama.cpp
+RUN cmake -S . -B build -DGGML_CUDA=ON \
+    && cmake --build build --config Release --target llama-server -j
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+WORKDIR /app
+COPY --from=build /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY docker/start-llama.sh /usr/local/bin/start-llama.sh
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod +x /usr/local/bin/start-llama.sh
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/start-llama.sh"]

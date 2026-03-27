@@ -1,0 +1,6 @@
+.enuv/
+vendor/
+models/
+app/__pycache__/
+*.pyc
+docker/.env
