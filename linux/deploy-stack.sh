@@ -57,8 +57,35 @@ install_torch() {
   "$python_bin" -m pip install torch
 }
 
+ensure_venv_package() {
+  # Test if venv/ensurepip works; if not, try to install the distro package.
+  if "$PYTHON_EXE" -m ensurepip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local py_ver
+  py_ver="$("$PYTHON_EXE" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  local pkg="python${py_ver}-venv"
+
+  echo "ensurepip not available; attempting to install $pkg ..." >&2
+  if command -v apt-get >/dev/null 2>&1; then
+    if [[ $EUID -eq 0 ]]; then
+      apt-get install -y "$pkg"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo apt-get install -y "$pkg"
+    else
+      echo "Cannot install $pkg automatically. Run: apt install $pkg" >&2
+      exit 1
+    fi
+  else
+    echo "apt-get not found. Install the venv package for Python $py_ver manually." >&2
+    exit 1
+  fi
+}
+
 if [[ "$SKIP_PYTHON_SETUP" != "1" ]]; then
   require_cmd "$PYTHON_EXE"
+  ensure_venv_package
   step "Creating Python virtual environment"
   "$PYTHON_EXE" -m venv "$VENV_PATH"
 
