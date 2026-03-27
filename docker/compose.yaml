@@ -24,14 +24,18 @@ services:
     container_name: cohere-transcribe
     environment:
       COHERE_MODEL_ID: "${COHERE_MODEL_ID:-CohereLabs/cohere-transcribe-03-2026}"
+      COHERE_MODEL_PATH: "${COHERE_MODEL_PATH:-/models/CohereLabs--cohere-transcribe-03-2026}"
       COHERE_DEFAULT_LANGUAGE: "${COHERE_DEFAULT_LANGUAGE:-en}"
       COHERE_DEVICE: "${COHERE_DEVICE:-auto}"
       COHERE_BATCH_SIZE: "${COHERE_BATCH_SIZE:-8}"
+      COHERE_LOCAL_FILES_ONLY: "${COHERE_LOCAL_FILES_ONLY:-true}"
+      COHERE_ALLOW_REMOTE_FALLBACK: "${COHERE_ALLOW_REMOTE_FALLBACK:-false}"
       COHERE_COMPILE: "${COHERE_COMPILE:-false}"
       COHERE_PIPELINE_DETOKENIZATION: "${COHERE_PIPELINE_DETOKENIZATION:-false}"
     ports:
       - "${COHERE_PORT:-9000}:9000"
     volumes:
+      - "${COHERE_MODEL_DIR:-../models}:/models"
       - huggingface-cache:/root/.cache/huggingface
 
 volumes:

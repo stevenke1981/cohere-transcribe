@@ -92,14 +92,32 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ### 3. 啟動 Cohere Transcribe
 
+先把模型預先下載到本地目錄：
+
+```bash
+HF_REPO=CohereLabs/cohere-transcribe-03-2026 HF_SNAPSHOT=1 ./linux/download-model.sh
+```
+
+Windows / PowerShell：
+
 ```powershell
 .\scripts\start-cohere-transcribe.ps1 -Port 9000 -Language en -Device auto
+```
+
+Linux / Bash：
+
+```bash
+LANGUAGE=en DEVICE=auto ./linux/start-cohere-transcribe.sh
 ```
 
 若要打開較高吞吐量的選項：
 
 ```powershell
 .\scripts\start-cohere-transcribe.ps1 -Port 9000 -Language en -CompileEncoder -PipelineDetokenization
+```
+
+```bash
+LANGUAGE=en DEVICE=auto COMPILE_ENCODER=true PIPELINE_DETOKENIZATION=true ./linux/start-cohere-transcribe.sh
 ```
 
 啟動後可用端點：
@@ -133,6 +151,9 @@ curl.exe -X POST http://localhost:9000/v1/audio/transcriptions `
 - `transformers 5.0` 與 `5.1` 與目前模型不相容，所以 `requirements.txt` 已排除。
 - 所有本地 Python 環境統一使用專案根目錄的 `.enuv`。
 - `llama.cpp` 需要 GGUF 模型；若用 `-HfRepo`，請選支援 `llama.cpp` 的 GGUF repository。
+- `cohere-transcribe` 現在預設優先載入本地模型目錄 `models/CohereLabs--cohere-transcribe-03-2026`，並以 `local_files_only=true` 啟動。
+- 若本地模型不存在，服務會在啟動時直接停止並提示先下載，不會自動去 Hugging Face 拉 gated repo。
+- 若你真的要允許遠端回退，請明確設定 `ALLOW_REMOTE_FALLBACK=true` 並同時把 `LOCAL_FILES_ONLY=false`。
 - `cohere-transcribe` 現在提供 OpenAI 風格的 `/v1/audio/transcriptions` 與 `/v1/models`，但仍是部分相容，不支援 timestamps、translation、streaming。
 - `http://localhost:9000/admin` 提供內建管理介面，可查看設定、測試上傳與最近請求。
 

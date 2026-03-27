@@ -56,6 +56,20 @@ HF_REPO=ggml-org/gemma-3-1b-it-GGUF ./linux/start-llama-server.sh
 
 啟動 `cohere-transcribe`：
 
+先下載完整模型快照：
+
+```bash
+HF_REPO=CohereLabs/cohere-transcribe-03-2026 HF_SNAPSHOT=1 ./linux/download-model.sh
+```
+
+預設會優先使用 `models/CohereLabs--cohere-transcribe-03-2026`，並以離線模式載入：
+
 ```bash
 LANGUAGE=en DEVICE=auto ./linux/start-cohere-transcribe.sh
+```
+
+若確實需要允許 Hugging Face 遠端回退：
+
+```bash
+LANGUAGE=en DEVICE=auto LOCAL_FILES_ONLY=false ALLOW_REMOTE_FALLBACK=true ./linux/start-cohere-transcribe.sh
 ```

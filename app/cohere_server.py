@@ -18,6 +18,10 @@ from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 from app.admin_ui import render_admin_page
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL_ID = "CohereLabs/cohere-transcribe-03-2026"
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -29,9 +33,35 @@ RECENT_REQUESTS: deque[dict[str, Any]] = deque(maxlen=20)
 RECENT_REQUESTS_LOCK = Lock()
 
 
+def _default_local_model_path(model_id: str) -> Path:
+    return REPO_ROOT / "models" / model_id.replace("/", "--")
+
+
+def _resolve_repo_path(path_value: str) -> Path:
+    raw_path = Path(path_value).expanduser()
+    if not raw_path.is_absolute():
+        raw_path = REPO_ROOT / raw_path
+    return raw_path.resolve()
+
+
+def _has_local_model_files(model_path: Path) -> bool:
+    return model_path.is_dir() and (model_path / "config.json").is_file()
+
+
+def _download_hint(model_id: str, model_path: Path) -> str:
+    return (
+        f"Download the model first, for example: "
+        f"HF_REPO={model_id} HF_SNAPSHOT=1 MODEL_DIR={model_path} "
+        f"./linux/download-model.sh"
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     model_id: str
+    local_model_path: Path
+    local_files_only: bool
+    allow_remote_fallback: bool
     device: str
     default_language: str
     batch_size: int
@@ -46,10 +76,19 @@ class Settings:
         else:
             device = requested_device
 
+        model_id = os.getenv("COHERE_MODEL_ID", DEFAULT_MODEL_ID).strip()
+        configured_model_path = os.getenv(
+            "COHERE_MODEL_PATH",
+            str(_default_local_model_path(model_id)),
+        ).strip()
+
         return Settings(
-            model_id=os.getenv(
-                "COHERE_MODEL_ID", "CohereLabs/cohere-transcribe-03-2026"
-            ).strip(),
+            model_id=model_id,
+            local_model_path=_resolve_repo_path(configured_model_path),
+            local_files_only=_env_flag("COHERE_LOCAL_FILES_ONLY", default=True),
+            allow_remote_fallback=_env_flag(
+                "COHERE_ALLOW_REMOTE_FALLBACK", default=False
+            ),
             device=device,
             default_language=os.getenv("COHERE_DEFAULT_LANGUAGE", "en").strip(),
             batch_size=int(os.getenv("COHERE_BATCH_SIZE", "8")),
@@ -64,23 +103,67 @@ def get_settings() -> Settings:
     return Settings.load()
 
 
+@dataclass(frozen=True)
+class ModelSource:
+    load_target: str
+    source_type: str
+
+
+def resolve_model_source(settings: Settings) -> ModelSource:
+    model_path = settings.local_model_path
+
+    if _has_local_model_files(model_path):
+        return ModelSource(load_target=str(model_path), source_type="local_path")
+
+    if model_path.exists():
+        if model_path.is_file():
+            raise RuntimeError(
+                f"COHERE_MODEL_PATH must point to a model directory, got file: "
+                f"{model_path}"
+            )
+
+        raise RuntimeError(
+            f"Local model directory exists but is incomplete: {model_path}. "
+            f"Expected config.json. {_download_hint(settings.model_id, model_path)}"
+        )
+
+    if not settings.allow_remote_fallback:
+        raise RuntimeError(
+            f"Local model directory not found: {model_path}. "
+            f"{_download_hint(settings.model_id, model_path)}"
+        )
+
+    return ModelSource(load_target=settings.model_id, source_type="repo_id")
+
+
 @dataclass
 class CohereRuntime:
     settings: Settings
+    model_source: ModelSource
     processor: AutoProcessor
     model: AutoModelForSpeechSeq2Seq
 
     @classmethod
     def create(cls) -> "CohereRuntime":
         settings = Settings.load()
+        model_source = resolve_model_source(settings)
         processor = AutoProcessor.from_pretrained(
-            settings.model_id, trust_remote_code=True
+            model_source.load_target,
+            trust_remote_code=True,
+            local_files_only=settings.local_files_only,
         )
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            settings.model_id, trust_remote_code=True
+            model_source.load_target,
+            trust_remote_code=True,
+            local_files_only=settings.local_files_only,
         ).to(settings.device)
         model.eval()
-        return cls(settings=settings, processor=processor, model=model)
+        return cls(
+            settings=settings,
+            model_source=model_source,
+            processor=processor,
+            model=model,
+        )
 
     def transcribe_file(
         self,
@@ -141,12 +224,20 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+def validate_startup_configuration() -> None:
+    resolve_model_source(get_settings())
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
     settings = get_settings()
     return {
         "status": "ok",
         "model_id": settings.model_id,
+        "local_model_path": str(settings.local_model_path),
+        "local_files_only": settings.local_files_only,
+        "allow_remote_fallback": settings.allow_remote_fallback,
         "device": settings.device,
         "default_language": settings.default_language,
     }
@@ -176,15 +267,26 @@ def admin_page() -> str:
 @app.get("/admin/api/status")
 def admin_status() -> dict[str, object]:
     settings = get_settings()
+    runtime_loaded = runtime_is_loaded()
+    runtime = get_runtime() if runtime_loaded else None
     return {
         "status": "ok",
         "model_id": settings.model_id,
+        "local_model_path": str(settings.local_model_path),
+        "local_files_only": settings.local_files_only,
+        "allow_remote_fallback": settings.allow_remote_fallback,
         "device": settings.device,
         "default_language": settings.default_language,
         "batch_size": settings.batch_size,
         "compile_encoder": settings.compile_encoder,
         "pipeline_detokenization": settings.pipeline_detokenization,
-        "runtime_loaded": runtime_is_loaded(),
+        "runtime_loaded": runtime_loaded,
+        "resolved_model_source": (
+            runtime.model_source.load_target if runtime is not None else None
+        ),
+        "resolved_model_source_type": (
+            runtime.model_source.source_type if runtime is not None else None
+        ),
     }
 
 
