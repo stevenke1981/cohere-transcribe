@@ -106,6 +106,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 - `http://localhost:9000/healthz`
 - `http://localhost:9000/v1/audio/transcriptions`
+- `http://localhost:9000/v1/models`
+- `http://localhost:9000/admin`
 
 ### 4. 測試 Cohere Transcribe API
 
@@ -131,6 +133,8 @@ curl.exe -X POST http://localhost:9000/v1/audio/transcriptions `
 - `transformers 5.0` 與 `5.1` 與目前模型不相容，所以 `requirements.txt` 已排除。
 - 所有本地 Python 環境統一使用專案根目錄的 `.enuv`。
 - `llama.cpp` 需要 GGUF 模型；若用 `-HfRepo`，請選支援 `llama.cpp` 的 GGUF repository。
+- `cohere-transcribe` 現在提供 OpenAI 風格的 `/v1/audio/transcriptions` 與 `/v1/models`，但仍是部分相容，不支援 timestamps、translation、streaming。
+- `http://localhost:9000/admin` 提供內建管理介面，可查看設定、測試上傳與最近請求。
 
 ## Linux / Docker
 

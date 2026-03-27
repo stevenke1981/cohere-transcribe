@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import os
+from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from threading import Lock
+from typing import Any
 
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+from app.admin_ui import render_admin_page
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -16,6 +23,10 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+RECENT_REQUESTS: deque[dict[str, Any]] = deque(maxlen=20)
+RECENT_REQUESTS_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -47,6 +58,10 @@ class Settings:
                 "COHERE_PIPELINE_DETOKENIZATION", default=False
             ),
         )
+
+
+def get_settings() -> Settings:
+    return Settings.load()
 
 
 @dataclass
@@ -92,6 +107,33 @@ def get_runtime() -> CohereRuntime:
     return CohereRuntime.create()
 
 
+def runtime_is_loaded() -> bool:
+    return get_runtime.cache_info().currsize > 0
+
+
+def record_request(
+    *,
+    filename: str,
+    language: str,
+    response_format: str,
+    text: str,
+) -> None:
+    item = {
+        "filename": filename,
+        "language": language,
+        "response_format": response_format,
+        "preview": text[:240],
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    with RECENT_REQUESTS_LOCK:
+        RECENT_REQUESTS.appendleft(item)
+
+
+def recent_requests() -> list[dict[str, Any]]:
+    with RECENT_REQUESTS_LOCK:
+        return list(RECENT_REQUESTS)
+
+
 app = FastAPI(
     title="Cohere Transcribe Server",
     version="0.1.0",
@@ -101,7 +143,7 @@ app = FastAPI(
 
 @app.get("/healthz")
 def healthz() -> dict[str, object]:
-    settings = Settings.load()
+    settings = get_settings()
     return {
         "status": "ok",
         "model_id": settings.model_id,
@@ -110,13 +152,58 @@ def healthz() -> dict[str, object]:
     }
 
 
+@app.get("/v1/models")
+def list_models() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": settings.model_id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+            }
+        ],
+    }
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page() -> str:
+    return render_admin_page()
+
+
+@app.get("/admin/api/status")
+def admin_status() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "model_id": settings.model_id,
+        "device": settings.device,
+        "default_language": settings.default_language,
+        "batch_size": settings.batch_size,
+        "compile_encoder": settings.compile_encoder,
+        "pipeline_detokenization": settings.pipeline_detokenization,
+        "runtime_loaded": runtime_is_loaded(),
+    }
+
+
+@app.get("/admin/api/recent")
+def admin_recent() -> dict[str, object]:
+    return {"items": recent_requests()}
+
+
 @app.post("/v1/audio/transcriptions")
 async def create_transcription(
     file: UploadFile = File(...),
     model: str | None = Form(default=None),
     language: str | None = Form(default=None),
     punctuation: bool = Form(default=True),
-) -> dict[str, str]:
+    prompt: str | None = Form(default=None),
+    response_format: str | None = Form(default="json"),
+    temperature: float | None = Form(default=None),
+    timestamp_granularities: list[str] | None = Form(default=None),
+) -> JSONResponse | PlainTextResponse | dict[str, object]:
     runtime = get_runtime()
 
     if model and model != runtime.settings.model_id:
@@ -131,6 +218,13 @@ async def create_transcription(
     target_language = (language or runtime.settings.default_language).strip()
     if not target_language:
         raise HTTPException(status_code=400, detail="language is required.")
+
+    normalized_response_format = (response_format or "json").strip().lower()
+    if normalized_response_format not in {"json", "text", "verbose_json"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported response_format. Use json, text, or verbose_json.",
+        )
 
     suffix = Path(file.filename or "upload.wav").suffix or ".wav"
     payload = await file.read()
@@ -159,8 +253,34 @@ async def create_transcription(
         if temp_path:
             Path(temp_path).unlink(missing_ok=True)
 
-    return {
+    record_request(
+        filename=file.filename or "upload.wav",
+        language=target_language,
+        response_format=normalized_response_format,
+        text=text,
+    )
+
+    base_response: dict[str, object] = {
         "text": text,
         "language": target_language,
         "model": runtime.settings.model_id,
+        "response_format": normalized_response_format,
     }
+
+    if prompt:
+        base_response["prompt_accepted"] = True
+
+    if temperature is not None:
+        base_response["temperature_accepted"] = temperature
+
+    if timestamp_granularities:
+        base_response["timestamp_granularities_accepted"] = timestamp_granularities
+
+    if normalized_response_format == "text":
+        return PlainTextResponse(text)
+
+    if normalized_response_format == "verbose_json":
+        base_response["segments"] = []
+        base_response["words"] = []
+
+    return JSONResponse(base_response)
