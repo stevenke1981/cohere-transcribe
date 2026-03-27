@@ -193,7 +193,7 @@ def admin_recent() -> dict[str, object]:
     return {"items": recent_requests()}
 
 
-@app.post("/v1/audio/transcriptions")
+@app.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     file: UploadFile = File(...),
     model: str | None = Form(default=None),
